@@ -69,62 +69,32 @@ export async function importPrivateKey(pem: string) {
 }
 
 export async function encryptMessage(message: string, publicKey: CryptoKey) {
-  try {
-    const aesKey = await generateAESKey();
-    const encrypted = await encryptWithAES(message, aesKey);
-    const encryptedKey = await encryptAESKeyForUser(aesKey, publicKey);
-    
-    return JSON.stringify({
-      content: encrypted.content,
-      iv: encrypted.iv,
-      key: encryptedKey,
-      v: "h1" // version hybrid 1
-    });
-  } catch (e) {
-    console.error("Hybrid encryption failed, falling back to RSA", e);
-    const encoder = new TextEncoder();
-    const data = encoder.encode(message);
-    const encrypted = await window.crypto.subtle.encrypt(
-      { name: "RSA-OAEP" },
-      publicKey,
-      data
-    );
-    return bufferToBase64(encrypted);
-  }
+  const encoder = new TextEncoder();
+  const data = encoder.encode(message);
+  const encrypted = await window.crypto.subtle.encrypt(
+    {
+      name: "RSA-OAEP",
+    },
+    publicKey,
+    data
+  );
+  return bufferToBase64(encrypted);
 }
 
-export async function decryptMessage(encryptedStr: string, privateKey: CryptoKey) {
+export async function decryptMessage(encryptedBase64: string, privateKey: CryptoKey) {
   try {
-    let packet;
-    try {
-      packet = JSON.parse(encryptedStr);
-    } catch (e) {
-      // Not JSON, assume legacy RSA
-      const data = base64ToBuffer(encryptedStr);
-      const decryptedBuffer = await window.crypto.subtle.decrypt(
-        { name: "RSA-OAEP" },
-        privateKey,
-        data
-      );
-      return new TextDecoder().decode(decryptedBuffer);
-    }
-
-    if (packet.v === "h1" && packet.key && packet.content && packet.iv) {
-      const aesKey = await decryptAESKeyWithUserPrivateKey(packet.key, privateKey);
-      return await decryptWithAES(packet.content, packet.iv, aesKey);
-    }
-
-    // Legacy RSA fallback if it was JSON but not hybrid
-    const data = base64ToBuffer(encryptedStr);
+    const data = base64ToBuffer(encryptedBase64);
     const decryptedBuffer = await window.crypto.subtle.decrypt(
-      { name: "RSA-OAEP" },
+      {
+        name: "RSA-OAEP",
+      },
       privateKey,
       data
     );
     return new TextDecoder().decode(decryptedBuffer);
   } catch (error) {
-    // Return a neutral placeholder instead of throwing to prevent UI crashes as requested
-    return "[Secure Signal]";
+    console.error("Decryption failed:", error);
+    throw error;
   }
 }
 

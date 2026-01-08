@@ -127,7 +127,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
   const decryptMessageContent = async (msg: any) => {
     try {
-      if (!msg.encrypted_content) return "[Empty Signal]";
+      if (!msg.encrypted_content) return "";
       
       let packet;
       try {
@@ -142,15 +142,15 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
       const encryptedAESKey = packet.keys[session.user.id];
       if (!encryptedAESKey) {
-        return "[Secure Signal: Key mismatch for current node]";
+        return "";
       }
 
-      if (!privateKey) return "[Decrypting...]";
+      if (!privateKey) return "";
 
       const aesKey = await decryptAESKeyWithUserPrivateKey(encryptedAESKey, privateKey);
       
       if (msg.media_type === "image" || msg.media_type === "snapshot") {
-        if (!msg.media_url) return "[Media Missing]";
+        if (!msg.media_url) return "";
         
         const response = await fetch(msg.media_url);
         const encryptedArrayBuffer = await response.arrayBuffer();
@@ -163,10 +163,9 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       }
 
       const decrypted = await decryptWithAES(packet.content, packet.iv, aesKey);
-      return decrypted || "[Empty Signal]";
+      return decrypted || "";
     } catch (e) {
-      console.error("Decryption error:", e);
-      return "[Decryption Failed: Node re-sync required]";
+      return "";
     }
   };
 
@@ -273,6 +272,29 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       channels.forEach(ch => supabase.removeChannel(ch));
     };
   }, [initialContact]);
+
+  useEffect(() => {
+    const decryptPending = async () => {
+      let hasUpdates = false;
+      const updatedMessages = await Promise.all(messages.map(async (msg) => {
+        if (!msg.decrypted_content && msg.encrypted_content) {
+          const decrypted = await decryptMessageContent(msg);
+          if (decrypted) {
+            hasUpdates = true;
+            return { ...msg, decrypted_content: decrypted };
+          }
+        }
+        return msg;
+      }));
+      if (hasUpdates) {
+        setMessages(updatedMessages);
+      }
+    };
+
+    if (privateKey && messages.some(m => !m.decrypted_content && m.encrypted_content)) {
+      decryptPending();
+    }
+  }, [messages, privateKey]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -503,9 +525,9 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                   ) : msg.media_type === 'image' ? (
                     <img src={msg.decrypted_content} alt="" className="rounded-[2rem] border border-white/10 max-h-80 shadow-2xl" />
                   ) : (
-                    <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
-                      {msg.decrypted_content || "[Encrypted Signal]"}
-                    </div>
+                      <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
+                        {msg.decrypted_content || ""}
+                      </div>
                   )}
                   <div className="flex items-center gap-2 mt-2 px-2">
                     <span className="text-[7px] font-black uppercase tracking-widest text-white/10">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
