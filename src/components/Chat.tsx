@@ -170,29 +170,6 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
     }
   };
 
-  useEffect(() => {
-    const reDecryptMessages = async () => {
-      const needsDecryption = messages.filter(m => !m.decrypted_content);
-      if (needsDecryption.length === 0 || !privateKey) return;
-
-      const updatedMessages = await Promise.all(
-        messages.map(async (msg) => {
-          if (!msg.decrypted_content) {
-            return { ...msg, decrypted_content: await decryptMessageContent(msg) };
-          }
-          return msg;
-        })
-      );
-      
-      const changed = updatedMessages.some((msg, i) => msg.decrypted_content !== messages[i].decrypted_content);
-      if (changed) {
-        setMessages(updatedMessages);
-      }
-    };
-    
-    reDecryptMessages();
-  }, [privateKey]);
-
   const fetchMessages = async () => {
     setLoading(true);
     try {
@@ -209,16 +186,15 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
             decrypted_content: await decryptMessageContent(msg) 
           }))
         );
-          setMessages(decryptedMessages);
-          
+        setMessages(decryptedMessages);
+        
           const unviewed = decryptedMessages.filter(m => 
             m.receiver_id === session.user.id && 
             !m.is_viewed && 
             m.decrypted_content !== null
           );
-          
-          if (unviewed.length > 0) {
 
+          if (unviewed.length > 0) {
             const now = new Date();
             const updates = unviewed.map(m => {
               const baseUpdate: any = { is_viewed: true, viewed_at: now.toISOString() };
@@ -249,13 +225,13 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
         if ((payload.new.receiver_id === session.user.id && payload.new.sender_id === initialContact.id) ||
             (payload.new.sender_id === session.user.id && payload.new.receiver_id === initialContact.id)) {
           
-            const decryptedContent = await decryptMessageContent(payload.new);
-            const msg = { ...payload.new, decrypted_content: decryptedContent };
-            
-            setMessages(prev => {
-              if (prev.find(m => m.id === msg.id)) return prev;
-              return [...prev, msg];
-            });
+          const decryptedContent = await decryptMessageContent(payload.new);
+          const msg = { ...payload.new, decrypted_content: decryptedContent };
+          
+          setMessages(prev => {
+            if (prev.find(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
 
             if (payload.new.receiver_id === session.user.id && decryptedContent !== null) {
               const now = new Date();
@@ -272,7 +248,6 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                 setShowSnapshotView(msg);
               }
             }
-
         }
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, async (payload) => {
@@ -513,13 +488,13 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
           <div className="flex items-center justify-center h-full">
             <div className="animate-spin border-2 border-indigo-500 border-t-transparent rounded-full w-8 h-8" />
           </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full opacity-20 text-center">
-            <ShieldCheck className="w-12 h-12 mb-4" />
-            <p className="text-[10px] font-black uppercase tracking-[0.4em]">End-to-End Encrypted</p>
-            <p className="text-[8px] font-bold uppercase tracking-[0.2em] mt-2">Matrix signals established</p>
-          </div>
-        ) : (
+          ) : messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full opacity-20 text-center">
+              <ShieldCheck className="w-12 h-12 mb-4" />
+              <p className="text-[10px] font-black uppercase tracking-[0.4em]">Secure Uplink</p>
+              <p className="text-[8px] font-bold uppercase tracking-[0.2em] mt-2">Protocol active</p>
+            </div>
+          ) : (
           messages.map((msg) => {
             const isMe = msg.sender_id === session.user.id;
             return (
@@ -532,18 +507,17 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                     </button>
                   ) : msg.media_type === 'image' ? (
                     <img src={msg.decrypted_content} alt="" className="rounded-[2rem] border border-white/10 max-h-80 shadow-2xl" />
-                  ) : (
+                    ) : (
                       <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
                         {msg.decrypted_content || (
-                          <div className="flex gap-1 items-center h-5">
-                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="w-1 h-1 bg-white rounded-full" />
-                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }} className="w-1 h-1 bg-white rounded-full" />
-                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity, delay: 0.4 }} className="w-1 h-1 bg-white rounded-full" />
+                          <div className="flex gap-1.5 items-center py-1">
+                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="w-1.5 h-1.5 bg-current rounded-full" />
+                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }} className="w-1.5 h-1.5 bg-current rounded-full" />
+                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity, delay: 0.4 }} className="w-1.5 h-1.5 bg-current rounded-full" />
                           </div>
                         )}
                       </div>
-
-                  )}
+                    )}
                   <div className="flex items-center gap-2 mt-2 px-2">
                     <span className="text-[7px] font-black uppercase tracking-widest text-white/10">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     {isMe && (
