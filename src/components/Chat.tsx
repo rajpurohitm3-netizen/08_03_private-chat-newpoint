@@ -92,10 +92,49 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       })
       .subscribe();
 
+    const clearChannel = supabase.channel(`clear-${session.user.id}-${initialContact.id}`)
+      .on("postgres_changes", { 
+        event: "DELETE", 
+        schema: "public", 
+        table: "messages"
+      }, (payload) => {
+        // Since we can't easily filter delete by sender/receiver in real-time payload for security reasons or specific logic,
+        // we just refresh or filter locally if needed. But simpler is to refetch or clear if any delete happens.
+        // Actually, for "Clear All", it's better to just refetch.
+        fetchMessages();
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(settingsChannel);
+      supabase.removeChannel(clearChannel);
     };
   }, [session.user.id, initialContact.id]);
+
+  const clearChat = async () => {
+    if (!confirm("Are you sure you want to clear all messages? This cannot be undone.")) return;
+    
+    try {
+      const response = await fetch("/api/messages/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: session.user.id,
+          contactId: initialContact.id
+        })
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+
+      setMessages([]);
+      setShowMenu(false);
+      toast.success("Chat cleared successfully");
+    } catch (error: any) {
+      console.error("Clear chat error:", error);
+      toast.error("Failed to clear chat");
+    }
+  };
 
   const updateAutoDeleteMode = async (mode: string) => {
     setAutoDeleteMode(mode);
@@ -127,7 +166,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
   const decryptMessageContent = async (msg: any) => {
     try {
-      if (!msg.encrypted_content) return "";
+      if (!msg.encrypted_content) return "[Empty Signal]";
       
       let packet;
       try {
@@ -142,15 +181,15 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
       const encryptedAESKey = packet.keys[session.user.id];
       if (!encryptedAESKey) {
-        return "";
+        return "[Secure Signal: Key mismatch for current node]";
       }
 
-      if (!privateKey) return null;
+      if (!privateKey) return "[Decrypting...]";
 
       const aesKey = await decryptAESKeyWithUserPrivateKey(encryptedAESKey, privateKey);
       
       if (msg.media_type === "image" || msg.media_type === "snapshot") {
-        if (!msg.media_url) return "";
+        if (!msg.media_url) return "[Media Missing]";
         
         const response = await fetch(msg.media_url);
         const encryptedArrayBuffer = await response.arrayBuffer();
@@ -163,10 +202,10 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       }
 
       const decrypted = await decryptWithAES(packet.content, packet.iv, aesKey);
-      return decrypted || "";
+      return decrypted || "[Empty Signal]";
     } catch (e) {
       console.error("Decryption error:", e);
-      return "";
+      return "[Decryption Failed: Node re-sync required]";
     }
   };
 
@@ -188,28 +227,22 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
         );
         setMessages(decryptedMessages);
         
-        const unviewed = decryptedMessages.filter(m => 
-          m.receiver_id === session.user.id && 
-          !m.is_viewed && 
-          m.decrypted_content !== null && 
-          m.decrypted_content !== ""
-        );
+          const unviewed = data.filter(m => m.receiver_id === session.user.id && !m.is_viewed);
+          if (unviewed.length > 0) {
+            const now = new Date();
+            const updates = unviewed.map(m => {
+              const baseUpdate: any = { is_viewed: true, viewed_at: now.toISOString() };
+              if (m.is_disappearing && m.disappearing_duration) {
+                baseUpdate.expires_at = new Date(now.getTime() + m.disappearing_duration * 60 * 1000).toISOString();
+              }
+              return { id: m.id, ...baseUpdate };
+            });
 
-        if (unviewed.length > 0) {
-          const now = new Date();
-          const updates = unviewed.map(m => {
-            const baseUpdate: any = { is_viewed: true, viewed_at: now.toISOString() };
-            if (m.is_disappearing && m.disappearing_duration) {
-              baseUpdate.expires_at = new Date(now.getTime() + m.disappearing_duration * 60 * 1000).toISOString();
+            for (const update of updates) {
+              const { id, ...rest } = update;
+              await supabase.from("messages").update(rest).eq("id", id);
             }
-            return { id: m.id, ...baseUpdate };
-          });
-
-          for (const update of updates) {
-            const { id, ...rest } = update;
-            await supabase.from("messages").update(rest).eq("id", id);
           }
-        }
       }
     } catch (err) {
       console.error("Fetch messages error:", err);
@@ -229,12 +262,12 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
           const decryptedContent = await decryptMessageContent(payload.new);
           const msg = { ...payload.new, decrypted_content: decryptedContent };
           
-            setMessages(prev => {
-              if (prev.find(m => m.id === msg.id)) return prev;
-              return [...prev, msg];
-            });
+          setMessages(prev => {
+            if (prev.find(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
 
-            if (payload.new.receiver_id === session.user.id && decryptedContent !== null && decryptedContent !== "") {
+            if (payload.new.receiver_id === session.user.id) {
               const now = new Date();
               const update: any = { is_delivered: true, delivered_at: now.toISOString(), is_viewed: true, viewed_at: now.toISOString() };
               
@@ -478,6 +511,15 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                       ].map(opt => (
                         <button key={opt.id} onClick={() => updateAutoDeleteMode(opt.id)} className={`w-full text-left px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${autoDeleteMode === opt.id ? 'bg-indigo-600 text-white' : 'text-white/60 hover:bg-white/5'}`}>{opt.label}</button>
                       ))}
+                      
+                      <div className="my-2 border-t border-white/5" />
+                      <button 
+                        onClick={clearChat}
+                        className="w-full text-left px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest text-red-500 hover:bg-red-500/10 transition-all flex items-center gap-2"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Clear All Chat
+                      </button>
                     </motion.div>
                   )}</AnimatePresence>
             </div>
@@ -508,17 +550,11 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                     </button>
                   ) : msg.media_type === 'image' ? (
                     <img src={msg.decrypted_content} alt="" className="rounded-[2rem] border border-white/10 max-h-80 shadow-2xl" />
-                    ) : (
-                      <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
-                        {msg.decrypted_content === null ? (
-                          <div className="flex gap-1 items-center py-1">
-                            <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 1.5, repeat: Infinity }} className="h-2 w-12 bg-white/20 rounded-full" />
-                          </div>
-                        ) : (
-                          msg.decrypted_content || ""
-                        )}
-                      </div>
-                    )}
+                  ) : (
+                    <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
+                      {msg.decrypted_content || "[Encrypted Signal]"}
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 mt-2 px-2">
                     <span className="text-[7px] font-black uppercase tracking-widest text-white/10">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     {isMe && (
