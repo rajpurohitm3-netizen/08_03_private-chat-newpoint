@@ -209,12 +209,12 @@ export function WatchParty({ contact, onClose, userId, privateKey, isInitiator =
       const parsed = JSON.parse(signalStr);
       if (parsed.encrypted) {
         const decrypted = await decryptMessage(parsed.encrypted, privateKey);
+        if (!decrypted) return null;
         return JSON.parse(decrypted);
       }
       return parsed;
     } catch (e) {
-      console.error("Decryption failed", e);
-      return JSON.parse(signalStr);
+      return null;
     }
   };
 

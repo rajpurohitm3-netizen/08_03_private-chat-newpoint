@@ -1,4 +1,3 @@
-
 export async function generateKeyPair() {
   return await window.crypto.subtle.generateKey(
     {
@@ -93,8 +92,7 @@ export async function decryptMessage(encryptedBase64: string, privateKey: Crypto
     );
     return new TextDecoder().decode(decryptedBuffer);
   } catch (error) {
-    console.error("Decryption failed:", error);
-    throw error;
+    return null;
   }
 }
 
@@ -148,8 +146,7 @@ export async function decryptWithAES(encryptedBase64: string, ivBase64: string, 
     );
     return new TextDecoder().decode(decryptedBuffer);
   } catch (error) {
-    console.error("AES Decryption failed:", error);
-    throw error;
+    return null;
   }
 }
 
@@ -179,8 +176,7 @@ export async function decryptAESKeyWithUserPrivateKey(encryptedAESKeyBase64: str
       ["encrypt", "decrypt"]
     );
   } catch (error) {
-    console.error("AES Key decryption failed:", error);
-    throw error;
+    return null;
   }
 }
 
@@ -198,7 +194,7 @@ export async function encryptBlob(blob: Blob, key: CryptoKey): Promise<{ encrypt
   };
 }
 
-export async function decryptToBlob(encryptedArrayBuffer: ArrayBuffer, ivBase64: string, key: CryptoKey, mimeType: string): Promise<Blob> {
+export async function decryptToBlob(encryptedArrayBuffer: ArrayBuffer, ivBase64: string, key: CryptoKey, mimeType: string): Promise<Blob | null> {
   try {
     const ivBytes = base64ToBuffer(ivBase64);
 
@@ -209,8 +205,7 @@ export async function decryptToBlob(encryptedArrayBuffer: ArrayBuffer, ivBase64:
     );
     return new Blob([decryptedBuffer], { type: mimeType });
   } catch (error) {
-    console.error("Blob decryption failed:", error);
-    throw error;
+    return null;
   }
 }
 
