@@ -899,9 +899,9 @@ const advancedFeatures = [
 
             {activeView === "chat" && (
               <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-                  {!isChatUnlocked ? (
-                    <PasswordGate correctPassword="040408" onUnlock={() => { sessionStorage.setItem("chat_unlocked", "true"); setIsChatUnlocked(true); }} title="Access Control" subtitle="Secure Area" description="Verification required to access this node." />
-                  ) : !selectedContact ? (
+                {!isChatUnlocked ? (
+                  <PasswordGate correctPassword="040408" onUnlock={() => { sessionStorage.setItem("chat_unlocked", "true"); setIsChatUnlocked(true); }} title="Signal Uplink" subtitle="Encrypted Channel" description="Authorization code required to decrypt message matrix." />
+                ) : !selectedContact ? (
                   <div className="h-full flex flex-col p-8">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
                       <h2 className="text-2xl font-black uppercase italic">Signal Channels</h2>

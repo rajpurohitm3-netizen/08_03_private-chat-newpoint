@@ -127,7 +127,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
   const decryptMessageContent = async (msg: any) => {
     try {
-      if (!msg.encrypted_content) return null;
+      if (!msg.encrypted_content) return "";
       
       let packet;
       try {
@@ -142,7 +142,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
       const encryptedAESKey = packet.keys[session.user.id];
       if (!encryptedAESKey) {
-        return null;
+        return "";
       }
 
       if (!privateKey) return null;
@@ -150,7 +150,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       const aesKey = await decryptAESKeyWithUserPrivateKey(encryptedAESKey, privateKey);
       
       if (msg.media_type === "image" || msg.media_type === "snapshot") {
-        if (!msg.media_url) return null;
+        if (!msg.media_url) return "";
         
         const response = await fetch(msg.media_url);
         const encryptedArrayBuffer = await response.arrayBuffer();
@@ -163,10 +163,10 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       }
 
       const decrypted = await decryptWithAES(packet.content, packet.iv, aesKey);
-      return decrypted || null;
+      return decrypted || "";
     } catch (e) {
       console.error("Decryption error:", e);
-      return null;
+      return "";
     }
   };
 
@@ -188,27 +188,28 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
         );
         setMessages(decryptedMessages);
         
-          const unviewed = decryptedMessages.filter(m => 
-            m.receiver_id === session.user.id && 
-            !m.is_viewed && 
-            m.decrypted_content !== null
-          );
+        const unviewed = decryptedMessages.filter(m => 
+          m.receiver_id === session.user.id && 
+          !m.is_viewed && 
+          m.decrypted_content !== null && 
+          m.decrypted_content !== ""
+        );
 
-          if (unviewed.length > 0) {
-            const now = new Date();
-            const updates = unviewed.map(m => {
-              const baseUpdate: any = { is_viewed: true, viewed_at: now.toISOString() };
-              if (m.is_disappearing && m.disappearing_duration) {
-                baseUpdate.expires_at = new Date(now.getTime() + m.disappearing_duration * 60 * 1000).toISOString();
-              }
-              return { id: m.id, ...baseUpdate };
-            });
-
-            for (const update of updates) {
-              const { id, ...rest } = update;
-              await supabase.from("messages").update(rest).eq("id", id);
+        if (unviewed.length > 0) {
+          const now = new Date();
+          const updates = unviewed.map(m => {
+            const baseUpdate: any = { is_viewed: true, viewed_at: now.toISOString() };
+            if (m.is_disappearing && m.disappearing_duration) {
+              baseUpdate.expires_at = new Date(now.getTime() + m.disappearing_duration * 60 * 1000).toISOString();
             }
+            return { id: m.id, ...baseUpdate };
+          });
+
+          for (const update of updates) {
+            const { id, ...rest } = update;
+            await supabase.from("messages").update(rest).eq("id", id);
           }
+        }
       }
     } catch (err) {
       console.error("Fetch messages error:", err);
@@ -228,12 +229,12 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
           const decryptedContent = await decryptMessageContent(payload.new);
           const msg = { ...payload.new, decrypted_content: decryptedContent };
           
-          setMessages(prev => {
-            if (prev.find(m => m.id === msg.id)) return prev;
-            return [...prev, msg];
-          });
+            setMessages(prev => {
+              if (prev.find(m => m.id === msg.id)) return prev;
+              return [...prev, msg];
+            });
 
-            if (payload.new.receiver_id === session.user.id && decryptedContent !== null) {
+            if (payload.new.receiver_id === session.user.id && decryptedContent !== null && decryptedContent !== "") {
               const now = new Date();
               const update: any = { is_delivered: true, delivered_at: now.toISOString(), is_viewed: true, viewed_at: now.toISOString() };
               
@@ -488,13 +489,13 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
           <div className="flex items-center justify-center h-full">
             <div className="animate-spin border-2 border-indigo-500 border-t-transparent rounded-full w-8 h-8" />
           </div>
-          ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full opacity-20 text-center">
-              <ShieldCheck className="w-12 h-12 mb-4" />
-              <p className="text-[10px] font-black uppercase tracking-[0.4em]">Secure Uplink</p>
-              <p className="text-[8px] font-bold uppercase tracking-[0.2em] mt-2">Protocol active</p>
-            </div>
-          ) : (
+        ) : messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full opacity-20 text-center">
+            <ShieldCheck className="w-12 h-12 mb-4" />
+            <p className="text-[10px] font-black uppercase tracking-[0.4em]">End-to-End Encrypted</p>
+            <p className="text-[8px] font-bold uppercase tracking-[0.2em] mt-2">Matrix signals established</p>
+          </div>
+        ) : (
           messages.map((msg) => {
             const isMe = msg.sender_id === session.user.id;
             return (
@@ -509,12 +510,12 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                     <img src={msg.decrypted_content} alt="" className="rounded-[2rem] border border-white/10 max-h-80 shadow-2xl" />
                     ) : (
                       <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
-                        {msg.decrypted_content || (
-                          <div className="flex gap-1.5 items-center py-1">
-                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="w-1.5 h-1.5 bg-current rounded-full" />
-                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }} className="w-1.5 h-1.5 bg-current rounded-full" />
-                            <motion.div animate={{ opacity: [0.2, 0.5, 0.2] }} transition={{ duration: 1.5, repeat: Infinity, delay: 0.4 }} className="w-1.5 h-1.5 bg-current rounded-full" />
+                        {msg.decrypted_content === null ? (
+                          <div className="flex gap-1 items-center py-1">
+                            <motion.div animate={{ opacity: [0.3, 0.6, 0.3] }} transition={{ duration: 1.5, repeat: Infinity }} className="h-2 w-12 bg-white/20 rounded-full" />
                           </div>
+                        ) : (
+                          msg.decrypted_content || ""
                         )}
                       </div>
                     )}
