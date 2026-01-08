@@ -106,12 +106,12 @@ export function VideoCall({
       const parsed = JSON.parse(signalStr);
       if (parsed.encrypted) {
         const decrypted = await decryptMessage(parsed.encrypted, privateKey);
-        if (!decrypted) return null;
         return JSON.parse(decrypted);
       }
       return parsed;
     } catch (e) {
-      return null;
+      console.error("Decryption failed", e);
+      return JSON.parse(signalStr);
     }
   };
 
@@ -202,6 +202,32 @@ export function VideoCall({
         const pc = createPeerConnection(localStream);
         peerConnection.current = pc;
 
+        // Subscribe BEFORE sending signals to avoid race conditions
+        const channelId = [userId, contact.id].sort().join('-');
+        const channel = supabase.channel(`call-${channelId}`)
+          .on("postgres_changes", { event: "INSERT", schema: "public", table: "calls", filter: `receiver_id=eq.${userId}` }, async (payload) => {
+            const data = payload.new;
+            if (!peerConnection.current) return;
+            const signalData = await decryptSignal(data.signal_data);
+
+            if (data.type === "answer" && isInitiator && signalData.sdp && !hasAnswered.current) {
+              hasAnswered.current = true;
+              await peerConnection.current.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
+              remoteDescriptionSet.current = true;
+              await processQueuedCandidates(peerConnection.current);
+            } else if (data.type === "candidate" && signalData.candidate) {
+              if (remoteDescriptionSet.current) {
+                await peerConnection.current.addIceCandidate(new RTCIceCandidate(signalData.candidate));
+              } else {
+                iceCandidateQueue.current.push(signalData.candidate);
+              }
+            } else if (data.type === "end") {
+              endCall();
+            }
+          })
+          .subscribe();
+        channelRef.current = channel;
+
         if (isInitiator) {
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -233,30 +259,6 @@ export function VideoCall({
           }
         }
 
-        const channelId = [userId, contact.id].sort().join('-');
-        const channel = supabase.channel(`call-${channelId}`)
-          .on("postgres_changes", { event: "INSERT", schema: "public", table: "calls", filter: `receiver_id=eq.${userId}` }, async (payload) => {
-            const data = payload.new;
-            if (!peerConnection.current) return;
-            const signalData = await decryptSignal(data.signal_data);
-
-            if (data.type === "answer" && isInitiator && signalData.sdp && !hasAnswered.current) {
-              hasAnswered.current = true;
-              await peerConnection.current.setRemoteDescription(new RTCSessionDescription(signalData.sdp));
-              remoteDescriptionSet.current = true;
-              await processQueuedCandidates(peerConnection.current);
-            } else if (data.type === "candidate" && signalData.candidate) {
-              if (remoteDescriptionSet.current) {
-                await peerConnection.current.addIceCandidate(new RTCIceCandidate(signalData.candidate));
-              } else {
-                iceCandidateQueue.current.push(signalData.candidate);
-              }
-            } else if (data.type === "end") {
-              endCall();
-            }
-          })
-          .subscribe();
-        channelRef.current = channel;
 
       } catch (err) {
         console.error(err);

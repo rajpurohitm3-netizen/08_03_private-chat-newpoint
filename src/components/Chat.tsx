@@ -148,7 +148,6 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       if (!privateKey) return "[Decrypting...]";
 
       const aesKey = await decryptAESKeyWithUserPrivateKey(encryptedAESKey, privateKey);
-      if (!aesKey) return "[Secure Signal]";
       
       if (msg.media_type === "image" || msg.media_type === "snapshot") {
         if (!msg.media_url) return "[Media Missing]";
@@ -158,7 +157,6 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
         
         const mimeType = msg.media_type === "snapshot" ? "image/jpeg" : "image/*";
         const decryptedBlob = await decryptToBlob(encryptedArrayBuffer, packet.media_iv || packet.iv, aesKey, mimeType);
-        if (!decryptedBlob) return "[Secure Signal]";
         const url = URL.createObjectURL(decryptedBlob);
         setBlobUrls(prev => new Set(prev).add(url));
         return url;
@@ -167,7 +165,8 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       const decrypted = await decryptWithAES(packet.content, packet.iv, aesKey);
       return decrypted || "[Empty Signal]";
     } catch (e) {
-      return "[Secure Signal]";
+      console.error("Decryption error:", e);
+      return "[Decryption Failed: Node re-sync required]";
     }
   };
 

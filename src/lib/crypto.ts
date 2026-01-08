@@ -1,3 +1,4 @@
+
 export async function generateKeyPair() {
   return await window.crypto.subtle.generateKey(
     {
@@ -68,31 +69,62 @@ export async function importPrivateKey(pem: string) {
 }
 
 export async function encryptMessage(message: string, publicKey: CryptoKey) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(message);
-  const encrypted = await window.crypto.subtle.encrypt(
-    {
-      name: "RSA-OAEP",
-    },
-    publicKey,
-    data
-  );
-  return bufferToBase64(encrypted);
+  try {
+    const aesKey = await generateAESKey();
+    const encrypted = await encryptWithAES(message, aesKey);
+    const encryptedKey = await encryptAESKeyForUser(aesKey, publicKey);
+    
+    return JSON.stringify({
+      content: encrypted.content,
+      iv: encrypted.iv,
+      key: encryptedKey,
+      v: "h1" // version hybrid 1
+    });
+  } catch (e) {
+    console.error("Hybrid encryption failed, falling back to RSA", e);
+    const encoder = new TextEncoder();
+    const data = encoder.encode(message);
+    const encrypted = await window.crypto.subtle.encrypt(
+      { name: "RSA-OAEP" },
+      publicKey,
+      data
+    );
+    return bufferToBase64(encrypted);
+  }
 }
 
-export async function decryptMessage(encryptedBase64: string, privateKey: CryptoKey) {
+export async function decryptMessage(encryptedStr: string, privateKey: CryptoKey) {
   try {
-    const data = base64ToBuffer(encryptedBase64);
+    let packet;
+    try {
+      packet = JSON.parse(encryptedStr);
+    } catch (e) {
+      // Not JSON, assume legacy RSA
+      const data = base64ToBuffer(encryptedStr);
+      const decryptedBuffer = await window.crypto.subtle.decrypt(
+        { name: "RSA-OAEP" },
+        privateKey,
+        data
+      );
+      return new TextDecoder().decode(decryptedBuffer);
+    }
+
+    if (packet.v === "h1" && packet.key && packet.content && packet.iv) {
+      const aesKey = await decryptAESKeyWithUserPrivateKey(packet.key, privateKey);
+      return await decryptWithAES(packet.content, packet.iv, aesKey);
+    }
+
+    // Legacy RSA fallback if it was JSON but not hybrid
+    const data = base64ToBuffer(encryptedStr);
     const decryptedBuffer = await window.crypto.subtle.decrypt(
-      {
-        name: "RSA-OAEP",
-      },
+      { name: "RSA-OAEP" },
       privateKey,
       data
     );
     return new TextDecoder().decode(decryptedBuffer);
   } catch (error) {
-    return null;
+    // Return a neutral placeholder instead of throwing to prevent UI crashes as requested
+    return "[Secure Signal]";
   }
 }
 
@@ -146,7 +178,8 @@ export async function decryptWithAES(encryptedBase64: string, ivBase64: string, 
     );
     return new TextDecoder().decode(decryptedBuffer);
   } catch (error) {
-    return null;
+    console.error("AES Decryption failed:", error);
+    throw error;
   }
 }
 
@@ -176,7 +209,8 @@ export async function decryptAESKeyWithUserPrivateKey(encryptedAESKeyBase64: str
       ["encrypt", "decrypt"]
     );
   } catch (error) {
-    return null;
+    console.error("AES Key decryption failed:", error);
+    throw error;
   }
 }
 
@@ -194,7 +228,7 @@ export async function encryptBlob(blob: Blob, key: CryptoKey): Promise<{ encrypt
   };
 }
 
-export async function decryptToBlob(encryptedArrayBuffer: ArrayBuffer, ivBase64: string, key: CryptoKey, mimeType: string): Promise<Blob | null> {
+export async function decryptToBlob(encryptedArrayBuffer: ArrayBuffer, ivBase64: string, key: CryptoKey, mimeType: string): Promise<Blob> {
   try {
     const ivBytes = base64ToBuffer(ivBase64);
 
@@ -205,7 +239,8 @@ export async function decryptToBlob(encryptedArrayBuffer: ArrayBuffer, ivBase64:
     );
     return new Blob([decryptedBuffer], { type: mimeType });
   } catch (error) {
-    return null;
+    console.error("Blob decryption failed:", error);
+    throw error;
   }
 }
 
