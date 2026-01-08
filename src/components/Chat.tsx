@@ -92,49 +92,10 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       })
       .subscribe();
 
-    const clearChannel = supabase.channel(`clear-${session.user.id}-${initialContact.id}`)
-      .on("postgres_changes", { 
-        event: "DELETE", 
-        schema: "public", 
-        table: "messages"
-      }, (payload) => {
-        // Since we can't easily filter delete by sender/receiver in real-time payload for security reasons or specific logic,
-        // we just refresh or filter locally if needed. But simpler is to refetch or clear if any delete happens.
-        // Actually, for "Clear All", it's better to just refetch.
-        fetchMessages();
-      })
-      .subscribe();
-
     return () => {
       supabase.removeChannel(settingsChannel);
-      supabase.removeChannel(clearChannel);
     };
   }, [session.user.id, initialContact.id]);
-
-  const clearChat = async () => {
-    if (!confirm("Are you sure you want to clear all messages? This cannot be undone.")) return;
-    
-    try {
-      const response = await fetch("/api/messages/clear", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: session.user.id,
-          contactId: initialContact.id
-        })
-      });
-
-      const data = await response.json();
-      if (data.error) throw new Error(data.error);
-
-      setMessages([]);
-      setShowMenu(false);
-      toast.success("Chat cleared successfully");
-    } catch (error: any) {
-      console.error("Clear chat error:", error);
-      toast.error("Failed to clear chat");
-    }
-  };
 
   const updateAutoDeleteMode = async (mode: string) => {
     setAutoDeleteMode(mode);
@@ -164,9 +125,39 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
     initMyPublicKey();
   }, [session.user.id]);
 
+  const clearChat = async () => {
+    if (!confirm("Are you sure you want to clear all chat history? This cannot be undone.")) return;
+    
+    try {
+      const response = await fetch('/api/messages/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: session.user.id, contactId: initialContact.id })
+      });
+      
+      if (response.ok) {
+        setMessages([]);
+        const signalChannel = supabase.channel(`chat-signals-${initialContact.id}`);
+        await signalChannel.subscribe();
+        await signalChannel.send({
+          type: 'broadcast',
+          event: 'clear_chat',
+          payload: {}
+        });
+        toast.success("Chat history cleared");
+        setShowMenu(false);
+      } else {
+        toast.error("Failed to clear chat");
+      }
+    } catch (error) {
+      console.error("Clear chat error:", error);
+      toast.error("An error occurred while clearing chat");
+    }
+  };
+
   const decryptMessageContent = async (msg: any) => {
     try {
-      if (!msg.encrypted_content) return "[Empty Signal]";
+      if (!msg.encrypted_content) return "[Signal Purged]";
       
       let packet;
       try {
@@ -181,17 +172,18 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
 
       const encryptedAESKey = packet.keys[session.user.id];
       if (!encryptedAESKey) {
-        return "[Secure Signal: Key mismatch for current node]";
+        return "[Secure Signal: Node mismatch]";
       }
 
-      if (!privateKey) return "[Decrypting...]";
+      if (!privateKey) return "[Synchronizing...]";
 
       const aesKey = await decryptAESKeyWithUserPrivateKey(encryptedAESKey, privateKey);
       
       if (msg.media_type === "image" || msg.media_type === "snapshot") {
-        if (!msg.media_url) return "[Media Missing]";
+        if (!msg.media_url) return "[Media Purged]";
         
         const response = await fetch(msg.media_url);
+        if (!response.ok) return "[Media Purged]";
         const encryptedArrayBuffer = await response.arrayBuffer();
         
         const mimeType = msg.media_type === "snapshot" ? "image/jpeg" : "image/*";
@@ -204,8 +196,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
       const decrypted = await decryptWithAES(packet.content, packet.iv, aesKey);
       return decrypted || "[Empty Signal]";
     } catch (e) {
-      console.error("Decryption error:", e);
-      return "[Decryption Failed: Node re-sync required]";
+      return "[Signal Clear]";
     }
   };
 
@@ -291,6 +282,9 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
           setMessages(prev => prev.map(m => m.id === payload.new.id ? { ...payload.new, decrypted_content: decryptedContent } : m));
         }
       })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, (payload) => {
+        setMessages(prev => prev.filter(m => m.id !== payload.old.id));
+      })
       .subscribe();
 
     const signalChannel = supabase.channel(`chat-signals-${initialContact.id}`);
@@ -299,6 +293,10 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
         if (payload.payload.userId === initialContact.id) {
           setPartnerPresence(prev => ({ ...prev, isTyping: payload.payload.isTyping }));
         }
+      })
+      .on('broadcast', { event: 'clear_chat' }, () => {
+        setMessages([]);
+        toast.info("Chat cleared by partner");
       })
       .subscribe();
 
@@ -508,19 +506,18 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                         { id: "1m_view", label: "1 Min After View" }, 
                         { id: "1h_view", label: "1 Hour After View" }, 
                         { id: "3h_view", label: "3 Hours After View" }
-                      ].map(opt => (
-                        <button key={opt.id} onClick={() => updateAutoDeleteMode(opt.id)} className={`w-full text-left px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${autoDeleteMode === opt.id ? 'bg-indigo-600 text-white' : 'text-white/60 hover:bg-white/5'}`}>{opt.label}</button>
-                      ))}
-                      
-                      <div className="my-2 border-t border-white/5" />
-                      <button 
-                        onClick={clearChat}
-                        className="w-full text-left px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest text-red-500 hover:bg-red-500/10 transition-all flex items-center gap-2"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Clear All Chat
-                      </button>
-                    </motion.div>
+                        ].map(opt => (
+                          <button key={opt.id} onClick={() => updateAutoDeleteMode(opt.id)} className={`w-full text-left px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${autoDeleteMode === opt.id ? 'bg-indigo-600 text-white' : 'text-white/60 hover:bg-white/5'}`}>{opt.label}</button>
+                        ))}
+                        <div className="my-1 border-t border-white/5" />
+                        <button 
+                          onClick={clearChat}
+                          className="w-full text-left px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest text-red-400 hover:bg-red-500/10 transition-all flex items-center gap-2"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Clear All Chat
+                        </button>
+                      </motion.div>
                   )}</AnimatePresence>
             </div>
           </div>
@@ -552,7 +549,7 @@ export function Chat({ session, privateKey, initialContact, isPartnerOnline, onB
                     <img src={msg.decrypted_content} alt="" className="rounded-[2rem] border border-white/10 max-h-80 shadow-2xl" />
                   ) : (
                     <div className={`p-5 rounded-[2rem] text-sm font-medium leading-relaxed ${isMe ? "bg-indigo-600 text-white shadow-xl shadow-indigo-600/10" : "bg-white/[0.03] border border-white/5 text-white/90"}`}>
-                      {msg.decrypted_content || "[Encrypted Signal]"}
+                        {msg.decrypted_content || "[Signal Clear]"}
                     </div>
                   )}
                   <div className="flex items-center gap-2 mt-2 px-2">
